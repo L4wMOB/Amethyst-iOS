@@ -17,6 +17,7 @@
 #include "glfw_keycodes.h"
 #include "ctxbridges/bridge_tbl.h"
 #include "ctxbridges/osmesa_internal.h"
+#include "ios_uikit_bridge.h"
 #include "utils.h"
 
 int clientAPI;
@@ -71,8 +72,13 @@ int pojavInitOpenGL() {
     }
     JNI_LWJGL_changeRenderer(renderer.UTF8String);
     // Preload renderer library
-    dlopen([NSString stringWithFormat:@"@rpath/%@", renderer].UTF8String, RTLD_GLOBAL);
-
+    NSString *rendererPath = [NSString stringWithFormat:@"@rpath/%@", renderer];
+    dlerror();
+    void *preloadHandle = dlopen(rendererPath.UTF8String, RTLD_GLOBAL);
+    if (!preloadHandle) {
+        NSLog(@"[EGLBridge] Preload of %@ failed: %s", rendererPath, dlerror() ?: "unknown dlopen error");
+    }
+    
     return !br_init();
     //return 0;
 }
@@ -113,7 +119,15 @@ void* pojavCreateContext(basic_render_window_t* contextSrc) {
     static BOOL inited = NO;
     if (!inited) {
         inited = YES;
-        pojavInitOpenGL();
+        if (pojavInitOpenGL() != 0) {
+            NSString *renderer = NSProcessInfo.processInfo.environment[@"POJAV_RENDERER"];
+            NSLog(@"[EGLBridge] pojavInitOpenGL failed for renderer %@ — aborting context creation instead of crashing", renderer);
+            UIKit_returnToSplitView();
+            showDialog(localize(@"Error", nil),
+                [NSString stringWithFormat:@"Failed to initialize the %@ renderer. Check the device console log for the dlopen/dlsym error (look for \"EGLBridge:\"), then verify the renderer library is bundled in Frameworks/ and its dependencies (e.g. MoltenVK) resolve correctly.", renderer]);
+            inited = NO; // allow retrying (e.g. after switching renderer) instead of wedging this flag permanently
+            return NULL;
+        }
     }
 
     return br_init_context(contextSrc);
